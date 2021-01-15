@@ -1,0 +1,545 @@
+Continuous Tokens
+Continuous Tokens are a new kind of token managed by bonding curve contracts, named as such due to how its price is continuously calculated. A continuous token has interesting properties, such as:
+
+Limitless supply. There is no limit to the number of tokens that can be minted.
+Deterministic price. The buy and sell prices of tokens increase and decrease with the number of tokens minted.
+Continuous price. The price of token n is less than token n+1 and more than token n-1.
+Instant liquidity. Tokens can be bought or sold instantaneously at any time, the bonding curve acting as an automated market maker. A bonding curve contract acts as the counterparty of the transaction and always holds enough ETH in reserve to buy tokens back.
+These properties are made possible through the use of bonding curves.
+
+Bonding Curves
+A bonding curve is a mathematical curve that defines a relationship between price and token supply. Here’s an example of a bonding curve, where currentPrice = tokenSupply²:
+
+
+
+This bonding curve says that price increases as the supply of the token increases. In the case of an exponential curve such as the one above, the growth rate accelerate as the number of tokens minted increases.
+
+When a person has purchased the token, each subsequent buyer will have to pay a slightly higher price for each token, generating a potential profit for the earliest investors. As more people find out about the project and buying continues, the value of each token gradually increases along the bonding curve. Early investors who find promising projects early, buy the curve-bonded token, and then sell their token back can earn a profit in the future.
+
+Mathematical Formula
+The Bancor Formula allows us to calculate the dynamically changing price of a Continuous Token. The formula relies on a constant Reserve Ratio that is calculated as:
+
+
+
+Reserve Ratio = Reserve Token Balance / (Continuous Token Supply x Continuous Token Price)
+The Reserve Ratio is expressed as a percentage greater than 0% and up to 100%.
+
+The Reserve Ratio represents a fixed ratio between the Continuous Token’s total value (total supply × unit price) and the value of its Reserve Token balance. This ratio will be held constant by the Bancor Formula as both the Reserve Token balance and the Continuous Token’s total value (a.k.a. ‘market cap’) fluctuate with buys and sells.
+
+Since each purchase or sale of a Continuous Token triggers an increase or decrease of Reserve Tokens and Continuous Tokens, the price of the Continuous Token with respect to its Reserve Tokens will continuously recalculate to maintain the configured reserve ratio between them.
+
+Reserve Ratio = Price Sensitivity
+The Reserve Ratio determines how sharply a Continuous Token’s price needs to adjust in order to be maintained with every transaction, or in other words, its price sensitivity.
+
+Bonding Curves of different Reserve Ratios
+
+The diagram above shows some examples of bonding curves with different Reserve Ratios. In the bottom-left curve with a 10% Reserve Ratio, the price curve grow more aggressively with increasing supply. A Reserve Ratio higher than 10% would flatten towards the linear top-right shape as it approaches 50%.
+
+At different reserve ratios, we arrive at the following graph functions:
+
+When RR = 1 and n = 0, we get f(x) = m
+When RR = 1/2 and n = 1, we get f(x) = mx
+When RR = 1/10 and n = 9, we get f(x) = mx^9
+When RR = 9/10 and n = 1/9, we get f(x) = mx^(1/9)
+A higher reserve ratio between the Reserve Token balance and the Continuous Token will result in lower price sensitivity, meaning that each buy and sell will have a less than proportionate effect on the Continuous Token’s price movement. Conversely, a lower ratio between the Reserve Token balance and the Continuous Token will result in higher price sensitivity, meaning that each buy and sell will have a more than proportionate effect on the Continuous Token’s price movement.
+
+Bonding Curve Price Formulas
+We can simplify the Bancor formula and compute the Continuous Token’s current price as follows:
+
+
+
+ Continuous Token Price = Reserve Token Balance / (Continuous Token Supply x Reserve Ratio)
+ 
+Recall that the price of a Continuous Token increases as the supply of continuous tokens increase. Buying slides you up the price curve and selling slides you back down. Calculating price thus becomes problematic when you want to exchange a plural amount of tokens.
+
+Calculating the number of tokens minted for a given amount of ETH (or the number of ETH sent back for a given amount tokens) requires integral calculus, because we need to compute the area under the bonding curve:
+
+Integral calculus
+
+From the original formula, two new formulas can be derived. One to calculate the amount of continuous tokens one receives for a given number of reserve tokens:
+
+
+
+PurchaseReturn = ContinuousTokenSupply * ((1 + ReserveTokensReceived / ReserveTokenBalance) ^ (ReserveRatio) - 1)
+And another to calculate the amount of reserve tokens one receives in exchange for a given number of continuous tokens:
+
+
+
+SaleReturn = ReserveTokenBalance * (1 - (1 - ContinuousTokensReceived / ContinuousTokenSupply) ^ (1 / (ReserveRatio)))
+These formulas are the final price functions we can use for our bonding curve contracts.
+
+Bonding Curves on the Blockchain
+We can inscribe these curves on the blockchain. A bonding curve contract is a specific type of contract that issues its own Continuous Token. Prices are calculated by the contract based on a bonding curve.
+
+A bonding curve contract hold a balance of a Reserve Token (e.g. a balance of ETH). To buy Continuous Tokens, the buyer sends some amount of ETH to a bonding curve contract’s Buy function which calculates the price of the token in a ETH and issues you the correct amount of Continuous Tokens. The Sell function works in reverse: The contract will calculate the Continuous Token’s current selling price and will send you the correct amount of ETH.
+
+Contract Code
+The following contract calculates the price of both Buy and Sell functions:
+
+pragma solidity ^0.4.25;
+
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+
+import "./Power.sol"; // Efficient power function.
+
+/**
+* @title Bancor formula by Bancor
+*
+* Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements;
+* and to You under the Apache License, Version 2.0. "
+*/
+contract BancorBondingCurve is Power {
+   using SafeMath for uint256;
+   uint32 private constant MAX_RESERVE_RATIO = 1000000;
+
+   /**
+   * @dev given a continuous token supply, reserve token balance, reserve ratio, and a deposit amount (in the reserve token),
+   * calculates the return for a given conversion (in the continuous token)
+   *
+   * Formula:
+   * Return = _supply * ((1 + _depositAmount / _reserveBalance) ^ (_reserveRatio / MAX_RESERVE_RATIO) - 1)
+   *
+   * @param _supply              continuous token total supply
+   * @param _reserveBalance    total reserve token balance
+   * @param _reserveRatio     reserve ratio, represented in ppm, 1-1000000
+   * @param _depositAmount       deposit amount, in reserve token
+   *
+   *  @return purchase return amount
+  */
+  function calculatePurchaseReturn(
+    uint256 _supply,
+    uint256 _reserveBalance,
+    uint32 _reserveRatio,
+    uint256 _depositAmount) public constant returns (uint256)
+  {
+    // validate input
+    require(_supply > 0 && _reserveBalance > 0 && _reserveRatio > 0 && _reserveRatio <= MAX_RESERVE_RATIO);
+     // special case for 0 deposit amount
+    if (_depositAmount == 0) {
+      return 0;
+    }
+     // special case if the ratio = 100%
+    if (_reserveRatio == MAX_RESERVE_RATIO) {
+      return _supply.mul(_depositAmount).div(_reserveBalance);
+    }
+     uint256 result;
+    uint8 precision;
+    uint256 baseN = _depositAmount.add(_reserveBalance);
+    (result, precision) = power(
+      baseN, _reserveBalance, _reserveRatio, MAX_RESERVE_RATIO
+    );
+    uint256 newTokenSupply = _supply.mul(result) >> precision;
+    return newTokenSupply - _supply;
+  }
+   /**
+   * @dev given a continuous token supply, reserve token balance, reserve ratio and a sell amount (in the continuous token),
+   * calculates the return for a given conversion (in the reserve token)
+   *
+   * Formula:
+   * Return = _reserveBalance * (1 - (1 - _sellAmount / _supply) ^ (1 / (_reserveRatio / MAX_RESERVE_RATIO)))
+   *
+   * @param _supply              continuous token total supply
+   * @param _reserveBalance    total reserve token balance
+   * @param _reserveRatio     constant reserve ratio, represented in ppm, 1-1000000
+   * @param _sellAmount          sell amount, in the continuous token itself
+   *
+   * @return sale return amount
+  */
+  function calculateSaleReturn(
+    uint256 _supply,
+    uint256 _reserveBalance,
+    uint32 _reserveRatio,
+    uint256 _sellAmount) public constant returns (uint256)
+  {
+    // validate input
+    require(_supply > 0 && _reserveBalance > 0 && _reserveRatio > 0 && _reserveRatio <= MAX_RESERVE_RATIO && _sellAmount <= _supply);
+     // special case for 0 sell amount
+    if (_sellAmount == 0) {
+      return 0;
+    }
+     // special case for selling the entire supply
+    if (_sellAmount == _supply) {
+      return _reserveBalance;
+    }
+     // special case if the ratio = 100%
+    if (_reserveRatio == MAX_RESERVE_RATIO) {
+      return _reserveBalance.mul(_sellAmount).div(_supply);
+    }
+     uint256 result;
+    uint8 precision;
+    uint256 baseD = _supply - _sellAmount;
+    (result, precision) = power(
+      _supply, baseD, MAX_RESERVE_RATIO, _reserveRatio
+    );
+    uint256 oldBalance = _reserveBalance.mul(result);
+    uint256 newBalance = _reserveBalance << precision;
+    return oldBalance.sub(newBalance).div(result);
+  }
+}
+For reference, here is Bancor’s efficient Power function. It calculates an integer approximation of (_baseN / _baseD) ^ (_expN / _expD) * 2 ^ precision.
+
+The above BancorBondingCurve.sol contract makes use of the aforementioned Bancor Formula to implement calculatePurchaseReturn():
+
+function calculatePurchaseReturn(
+  uint256 _supply,
+  uint256 _reserveBalance,
+  uint32 _reserveRatio,
+  uint256 _depositAmount) public constant returns (uint256)
+{
+  // validate input
+  require(_supply > 0 && _reserveBalance > 0 && _reserveRatio > 0 && _reserveRatio <= MAX_RESERVE_RATIO);
+   // special case for 0 deposit amount
+  if (_depositAmount == 0) {
+    return 0;
+  }
+   // special case if the ratio = 100%
+  if (_reserveRatio == MAX_RESERVE_RATIO) {
+    return _supply.mul(_depositAmount).div(_reserveBalance);
+  }
+   uint256 result;
+  uint8 precision;
+  uint256 baseN = _depositAmount.add(_reserveBalance);
+  (result, precision) = power(
+    baseN, _reserveBalance, _reserveRatio, MAX_RESERVE_RATIO
+  );
+  uint256 newTokenSupply = _supply.mul(result) >> precision;
+  return newTokenSupply - _supply;
+}
+And calculateSaleReturn():
+
+function calculateSaleReturn(
+  uint256 _supply,
+  uint256 _reserveBalance,
+  uint32 _reserveRatio,
+  uint256 _sellAmount) public constant returns (uint256)
+{
+  // validate input
+  require(_supply > 0 && _reserveBalance > 0 && _reserveRatio > 0 && _reserveRatio <= MAX_RESERVE_RATIO && _sellAmount <= _supply);
+   // special case for 0 sell amount
+  if (_sellAmount == 0) {
+    return 0;
+  }
+   // special case for selling the entire supply
+  if (_sellAmount == _supply) {
+    return _reserveBalance;
+  }
+   // special case if the ratio = 100%
+  if (_reserveRatio == MAX_RESERVE_RATIO) {
+    return _reserveBalance.mul(_sellAmount).div(_supply);
+  }
+   uint256 result;
+  uint8 precision;
+  uint256 baseD = _supply - _sellAmount;
+  (result, precision) = power(
+    _supply, baseD, MAX_RESERVE_RATIO, _reserveRatio
+  );
+  uint256 oldBalance = _reserveBalance.mul(result);
+  uint256 newBalance = _reserveBalance << precision;
+  return oldBalance.sub(newBalance).div(result);
+}
+The calculatePurchaseReturn() and calculateSaleReturn() functions returns a price for a given buy or sell amount respectively. We can implement a Continuous Token contract using the two functions by inheriting from BancorBondingCurve.sol:
+
+pragma solidity 0.4.25;
+
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
+import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
+
+import "./BancorBondingCurve.sol";
+
+contract ContinuousToken is BancorBondingCurve, Ownable, ERC20 {
+    using SafeMath for uint256;
+
+    uint256 public scale = 10**18;
+    uint256 public reserveBalance = 10*scale;
+    uint256 public reserveRatio;
+
+    constructor(
+        uint256 _reserveRatio
+    ) public {
+        reserveRatio = _reserveRatio;
+        _mint(msg.sender, 1*scale);
+    }
+
+    function mint() public payable {
+        require(msg.value > 0, "Must send ether to buy tokens.");
+        _continuousMint(msg.value);
+    }
+
+    function burn(uint256 _amount) public {
+        uint256 returnAmount = _continuousBurn(_amount);
+        msg.sender.transfer(returnAmount);
+    }
+
+    function () public payable { mint(); }
+
+    function calculateContinuousMintReturn(uint256 _amount)
+        public view returns (uint256 mintAmount)
+    {
+        return calculatePurchaseReturn(totalSupply(), reserveBalance, uint32(reserveRatio), _amount);
+    }
+
+    function calculateContinuousBurnReturn(uint256 _amount)
+        public view returns (uint256 burnAmount)
+    {
+        return calculateSaleReturn(totalSupply(), reserveBalance, uint32(reserveRatio), _amount);
+    }
+
+    function _continuousMint(uint256 _deposit)
+        internal returns (uint256)
+    {
+        require(_deposit > 0, "Deposit must be non-zero.");
+
+        uint256 amount = calculateContinuousMintReturn(_deposit);
+        _mint(msg.sender, amount);
+        reserveBalance = reserveBalance.add(_deposit);
+        emit ContinuousMint(msg.sender, amount, _deposit);
+        return amount;
+    }
+
+    function _continuousBurn(uint256 _amount)
+        internal returns (uint256)
+    {
+        require(_amount > 0, "Amount must be non-zero.");
+        require(balanceOf(msg.sender) >= _amount, "Insufficient tokens to burn.");
+
+        uint256 reimburseAmount = calculateontinuousdBurnReturn(_amount);
+        reserveBalance = reserveBalance.sub(reimburseAmount);
+        _burn(msg.sender, _amount);
+        emit ContinuousBurn(msg.sender, _amount, reimburseAmount);
+        return reimburseAmount;
+    }
+}
+In the ContinuousToken.sol contract, we define _continuousMint():
+
+function calculateContinuousMintReturn(uint256 _amount)
+    public view returns (uint256 mintAmount)
+{
+    return calculatePurchaseReturn(totalSupply(), reserveBalance, uint32(reserveRatio), _amount);
+}
+
+function _continuousMint(uint256 _deposit) internal returns (uint256)
+{
+    require(_deposit > 0, "Deposit must be non-zero.");
+
+    uint256 amount = calculateContinuousMintReturn(_deposit);
+    _mint(msg.sender, amount);
+    reserveBalance = reserveBalance.add(_deposit);
+    emit ContinuousMint(msg.sender, amount, _deposit);
+    return amount;
+}
+And _continuousBurn():
+
+ function calculateContinuousBurnReturn(uint256 _amount)
+     public view returns (uint256 burnAmount)
+ {
+     return calculateSaleReturn(totalSupply(), reserveBalance, uint32(reserveRatio), _amount);
+ }
+
+ function _continuousBurn(uint256 _amount) internal returns (uint256)
+ {
+     require(_amount > 0, "Amount must be non-zero.");
+     require(balanceOf(msg.sender) >= _amount, "Insufficient tokens to burn.");
+
+     uint256 reimburseAmount = calculateContinuousBurnReturn(_amount);
+     reserveBalance = reserveBalance.sub(reimburseAmount);
+     _burn(msg.sender, _amount);
+     emit ContinuousBurn(msg.sender, _amount, reimburseAmount);
+     return reimburseAmount;
+ }
+ 
+Both _continuousMint() and _continuousBurn() are internal functions that increase and decrease the Continuous Token supply respectively. They make use of the BancorBondingCurve.sol contract to perform the calculation.
+
+Next, the ContinuousToken.sol contract also defines public mint() and burn() functions, which investors can call to buy or sell our continuous token:
+
+function mint() public payable {
+    require(msg.value > 0, "Must send ether to buy tokens.");
+    _continuousMint(msg.value);
+}
+
+function burn(uint256 _amount) public {
+    uint256 returnAmount = _continuousBurn(_amount);
+    msg.sender.transfer(returnAmount);
+}
+
+function () public payable { mint(); }
+That’s it! We now have a continuous token that can be purchased anytime at dynamically calculated prices, powered by a bonding curve.
+
+Recall that our continuous token has interesting properties, such as:
+
+Limitless supply. There is no limit to the number of tokens that can be minted.
+Deterministic price calculation. The buy and sell prices of tokens increase and decrease with the number of tokens minted.
+Continuous price. The price of token n is less than token n+1 and more than token n-1.
+Immediate liquidity. Tokens can be bought or sold instantaneously at any time, the bonding curve acting as an automated market maker.
+The adaptive supply of a Continuous Token (recall that it is newly issued when purchased and removed from circulation when sold) is a unique and enabling feature which allows for supply to adjust to demand and for Continuous Tokens to be continuously available for purchase at predictable prices.
+
+Building Custom Bonding Curves
+Our Continuous Token uses Bancor’s formula for the bonding curve. What if we don’t want to use the Bancor formula? We can define new curves by implementing the IBondingCurve functions:
+
+interface IBondingCurve {
+  function calculatePurchaseReturn(
+    uint256 _supply,
+    uint256 _reserveBalance,
+    uint32 _reserveRatio,
+    uint256 _depositAmount) public constant returns (uint256);
+
+  function calculateSaleReturn(
+    uint256 _supply,
+    uint256 _reserveBalance,
+    uint32 _reserveRatio,
+    uint256 _sellAmount) public constant returns (uint256);
+}
+You can use your own formulas to create your own bonding curve:
+
+pragma solidity ^0.4.25;
+
+import "openzeppelin-solidity/contracts/math/SafeMath.sol";
+
+import "../IBondingCurve.sol";
+
+// Bonding Curve based on a square root curve y = m * (x ^ 1/2)
+// This bonding curve is equivalent to Bancor's Formula where reserve ratio = 2/3
+contract MyBondingCurve is IBondingCurve {
+    using SafeMath for uint256;
+
+    uint256 constant public DECIMALS = 10**18;
+
+    function calculatePurchaseReturn(
+        uint256 _totalSupply,
+        uint256 _reserveBalance,
+        uint256 _reserveRatio,
+        uint256 _depositAmount
+    )   public
+        pure
+        returns (uint256)
+    {
+        uint256 newTotal = _totalSupply.add(_depositAmount);
+        uint256 newPrice = (newTotal * newTotal / DECIMALS) * (newTotal / DECIMALS);
+
+        return sqrt(newPrice) * 2 / 3 - _reserveBalance;
+    }
+
+    function calculateSaleReturn(
+        uint256 _totalSupply,
+        uint256 _reserveBalance,
+        uint256 _reserveRatio,
+        uint256 _sellAmount
+    )   public
+        pure
+        returns (uint256)
+    {
+        uint256 newTotal = _totalSupply.sub(_sellAmount);
+        uint256 newPrice = (newTotal * newTotal / DECIMALS) * (newTotal / DECIMALS);
+
+        return _reserveBalance - sqrt(newPrice) * 2 / 3;
+    }
+
+    function sqrt(
+      uint256 x
+    ) returns (uint256 y)
+    {
+        uint256 z = (x + 1) / 2;
+        y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+    }
+}
+Mitigating Front-Running Attacks
+Bonding curves are susceptible to front-running attacks. Front-running attacks occur when a trader watches for submitted pending orders and uses this foreknowledge to send their own order with higher gas to cut ahead of the original order and profit from it. For example, in response to a large pending buy order, the trader can submit their own buy order and sell it back for a profit.
+
+💡 Front-running is similar to latency arbitrage in high-frequency trading.
+
+We can mitigate front-running with an explicit cap on gas price traders are allowed to use. Traders should use this maximum allowed gas price when sending their orders. In the contract below, we define a validGasPrice() modifier that can be applied to our bonding curve buy and sell functions:
+
+pragma solidity ^0.4.25;
+
+import "openzeppelin-solidity/contracts/ownership/Ownable.sol";
+
+contract CappedGasPrice is Ownable {
+    uint256 public maxGasPrice = 1 * 10**18; // Adjustable value
+
+    modifier validGasPrice() {
+        require(tx.gasprice <= maxGasPrice, "Transaction gas price cannot exceed maximum gas price.");
+        _;
+    }
+
+    function setMaxGasPrice(uint256 gasPrice) public onlyOwner {
+        maxGasPrice = gasPrice;
+    }
+}
+This cap prevents traders from having their order executed ahead of submitted pending orders, and thus prevents front-running.
+
+Bonding Curve Use Cases
+In the previous section, we’ve learned about continuous tokens and bonding curves. What can we build with these cryptoeconomic primitives?
+
+
+
+To build successful decentralized systems, we need to design incentives that encourage network participants to behave in a way that result in win-win situations. We want to make it easy for people to do the right things, and make it difficult for people to do the wrong things. In this section, let’s examine how bonding curves are being used in two use cases:
+
+Automated Market Makers
+Continuous Organizations
+1. Automated Market Makers
+In a typical cryptocurrency exchange (either centralized or decentralized) Market Makers create buy or sell orders for a particular token exchange pair, and Market Takers fill any satisfparticipanty orders to perform the exchange.
+
+In this workflow, a matching process is necessary for an exchange to occur. Market makers need to create orders, orders need to be published on exchanges, market takers need to browse orders, and market makers need to wait for the orders to get filled. Because both buy and sell orders have prices attached to them, due to market fluctuations there is the possibility that some orders may take a while to get filled, if ever.
+
+
+In the previous section, we’ve learned about continuous tokens and bonding curves. What can we build with these cryptoeconomic primitives?
+
+
+To build successful decentralized systems, we need to design incentives that encourage network participants to behave in a way that result in win-win situations. We want to make it easy for people to do the right things, and make it difficult for people to do the wrong things. In this section, let’s examine how bonding curves are being used in two use cases:
+
+Automated Market Makers
+Continuous Organizations
+1. Automated Market Makers
+In a typical cryptocurrency exchange (either centralized or decentralized) Market Makers create buy or sell orders for a particular token exchange pair, and Market Takers fill any satisfparticipanty orders to perform the exchange.
+
+In this workflow, a matching process is necessary for an exchange to occur. Market makers need to create orders, orders need to be published on exchanges, market takers need to browse orders, and market makers need to wait for the orders to get filled. Because both buy and sell orders have prices attached to them, due to market fluctuations there is the possibility that some orders may take a while to get filled, if ever.
+
+There must be a buyer and a seller available at the same time and on the same venue in order for the tokens to pass through the network. The challenge with consistently finding a match between buyers and sellers is a problem known in economics as double coincidence of wants.
+
+How Automated Market Makers Work
+Each Automated Market Maker contract holds a balance of a Reserve Token (for example, a reserve balance of ETH). Buyers can use the reserve token to purchase a Continuous Token managed by the AMM (for example, a fictional token PEPE) by sending them to the Automated Market Maker contract, which adds the incoming amount to its reserve token balance and in return issues new Continuous Tokens, which are automatically sent back to the buyer.
+
+The Bancor Protocol enables automatic price determination and an autonomous liquidity mechanism for tokens at a price that is continuously recalculated to balance buy and sell volumes. Prices are calculated using the Bancor formula:
+
+Continuous Token Price = Reserve Token Balance / (Continuous Token Supply x Reserve Ratio)
+Anyone can always purchase a Continuous Token by depositing some amount of its reserve token into its smart contract. In this case, both the reserve balance of the AMM has increased, as has the Continuous Token’s supply, since new units were issued. Similarly, a seller may send back any amount of Continuous Tokens to its contract, which will then remove these Continuous Tokens from circulation and withdraw a corresponding amount of Reserve Tokens from the AMM’s balance and send them to the seller. In this case, both the AMM’s Reserve Token balance and the Continuous Token’s supply have decreased.
+
+Summary: Automated Market Makers
+Automated market makers helps bootstrap a liquid exchange from the very early days of a small-scale token communities. A common challenge in creating successful token-based communities is reaching a critical barrier where there are enough market participants to reach a liquid, healthy exchange of value. This is similar to the chicken-and-egg problem in market networks.
+
+Users can always buy or sell tokens in the network directly through automated smart contracts, even when there are only few or no other buyers or sellers in the market.
+
+2. Continuous Organizations
+In the past few years, Initial Coin Offerings (ICOs) have been the primary distribution method of the majority of token projects. The initial supply of tokens are issued in crowdsales orchestrated through a smart contract. Investors send Ether to a crowdsale contract to receive a corresponding amount of tokens once a funding goal is met (or have their contributions refunded.) The Token Generation Event is a one-time process at the beginning of a project’s lifetime.
+
+
+
+In contrast, in continuous token models there is no ICO nor Token Launch. Instead of pre-selling tokens during a launch phase, the tokens are minted continuously over time through various means via an Automated Market Maker contract. Tokens are minted as needed and used within the protocol or application when required. The network forms around the need of the token and dissolves when its utility or interest wanes.
+
+Recall that when tokens are minted through a continuous token model, its value increases as more tokens are in circulation. At any point, token holders can exchange their token back into the currency they bought it with. Behind the scenes, bonding curves are used to model the rate at which price changes in response to changes in supply by picking an appropriate Reserve Ratio.
+
+This idea has been refined into the Continuous Organization model, an alternative to ICOs.
+
+The Continuous Organization is a new type of organization designed to align the stakeholders’ interests significantly better than in traditional organizations. A Continuous Organization is any kind of organization that issues fully digital securities called FAIR Securities (Frictionless Agreement for Investments and Returns securities) by funneling part or all of its cash-flows to a Decentralized Autonomous Trust (DAT). A DAT is a smart-contract that automatically mints, burns and distributes FAIR Securities (FAIRs) according to the organization’s cash-flows and predefined rules.
+
+In a Continuous Organization, the Decentralized Autonomous Trust (DAT) smart contract implements a bonding curve contract to automatically mint, burn and distribute security tokens called FAIRs. These security tokens represent a claim on the future cash-flows handled by the DAT. The organization, its investors and, potentially, its customers interact with the DAT by sending ETH or FAIRs to it.
+
+DATs perform a similar role as Automated Market Maker contracts we’ve seen in a previous section. Investors can exchange a reserve token (ETH) for a continuous token at dynamically calculated prices.
+
+Continuous Organization Bonding Curve
+
+In the case of Continuous Organizations, the curve has separate buy and sell curves. The spread between the two results in profits earned by the organization.
+
+Here’s how a DAT work:
+
+
+Summary: Continuous Organizations
+Continuous Organizations are a new type of internet-native organisation backed by fully digital liquid securities that seeks to better align stakeholders’ interests.
+
+One of the most valuable properties of a Continuous Organization is that the liquidity of FAIRs is immediate and guaranteed. If an investor does not find a buyer or a seller in the secondary market, they can always buy or sell tokens to the DAT directly.
+
+In addition, unlike an ICO, a Continuous Organization is continuously fundraising as investors can permission-lessly buy and sell the organization’s FAIRs at any time. This helps ensure long-term accountability of key project stakeholders and minimizes the risk of abandonment.
